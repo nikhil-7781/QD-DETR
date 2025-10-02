@@ -326,6 +326,24 @@ def train_hl(model, criterion, optimizer, lr_scheduler, train_dataset, val_datas
     tb_writer.close()
 
 
+def print_guided_query_samples(dataset, opt):
+    """Print 10 random original-guided query pairs at the end of training."""
+    logger.info("\n" + "="*80)
+    logger.info("SAMPLE ORIGINAL vs GUIDED QUERIES (10 random examples):")
+    logger.info("="*80)
+
+    # Select 10 random samples from the dataset
+    import random
+    num_samples = min(10, len(dataset.data))
+    sample_indices = random.sample(range(len(dataset.data)), num_samples)
+
+    for i, idx in enumerate(sample_indices, 1):
+        sample = dataset.data[idx]
+        logger.info(f"\n{i}. QID: {sample['qid']}")
+        logger.info(f"   Original: {sample['original_query']}")
+        logger.info(f"   Guided:   {sample['guided_query']}")
+
+    logger.info("\n" + "="*80)
 
 
 def start_training():
@@ -342,11 +360,22 @@ def start_training():
     print(opt.a_feat_dir)
     print('##################')
     if opt.a_feat_dir is None:
+        # Update paths if using guided queries
+        train_data_path = opt.train_path
+        q_feat_dir = opt.t_feat_dir
+        if opt.use_guided_queries:
+            # Replace data path with guided version
+            train_data_path = train_data_path.replace("highlight_", "guided_queries/highlight_").replace("_release.jsonl", "_guided.jsonl")
+            # Use guided query features directory
+            q_feat_dir = opt.t_feat_dir.replace("clip_text_features", "clip_text_features_guided")
+            logger.info(f"Using guided queries from: {train_data_path}")
+            logger.info(f"Using guided query features from: {q_feat_dir}")
+
         dataset_config = dict(
             dset_name=opt.dset_name,
-            data_path=opt.train_path,
+            data_path=train_data_path,
             v_feat_dirs=opt.v_feat_dirs,
-            q_feat_dir=opt.t_feat_dir,
+            q_feat_dir=q_feat_dir,
             q_feat_type="last_hidden_state",
             max_q_l=opt.max_q_l,
             max_v_l=opt.max_v_l,
@@ -359,15 +388,27 @@ def start_training():
             span_loss_type=opt.span_loss_type,
             txt_drop_ratio=opt.txt_drop_ratio,
             dset_domain=opt.dset_domain,
+            use_guided_queries=opt.use_guided_queries,
         )
-        dataset_config["data_path"] = opt.train_path
+        dataset_config["data_path"] = train_data_path
         train_dataset = StartEndDataset(**dataset_config)
     else:
+        # Update paths if using guided queries
+        train_data_path = opt.train_path
+        q_feat_dir = opt.t_feat_dir
+        if opt.use_guided_queries:
+            # Replace data path with guided version
+            train_data_path = train_data_path.replace("highlight_", "guided_queries/highlight_").replace("_release.jsonl", "_guided.jsonl")
+            # Use guided query features directory
+            q_feat_dir = opt.t_feat_dir.replace("clip_text_features", "clip_text_features_guided")
+            logger.info(f"Using guided queries from: {train_data_path}")
+            logger.info(f"Using guided query features from: {q_feat_dir}")
+
         dataset_config = dict(
             dset_name=opt.dset_name,
-            data_path=opt.train_path,
+            data_path=train_data_path,
             v_feat_dirs=opt.v_feat_dirs,
-            q_feat_dir=opt.t_feat_dir,
+            q_feat_dir=q_feat_dir,
             a_feat_dir=opt.a_feat_dir,
             q_feat_type="last_hidden_state",
             max_q_l=opt.max_q_l,
@@ -381,16 +422,26 @@ def start_training():
             span_loss_type=opt.span_loss_type,
             txt_drop_ratio=opt.txt_drop_ratio,
             dset_domain=opt.dset_domain,
+            use_guided_queries=opt.use_guided_queries,
         )
-        dataset_config["data_path"] = opt.train_path
+        dataset_config["data_path"] = train_data_path
         train_dataset = StartEndDataset_audio(**dataset_config)
 
 
 
     if opt.eval_path is not None:
-        dataset_config["data_path"] = opt.eval_path
+        eval_data_path = opt.eval_path
+        eval_q_feat_dir = opt.t_feat_dir.replace("sub_features", "text_features")  # for pretraining
+
+        if opt.use_guided_queries:
+            # Replace eval data path with guided version
+            eval_data_path = eval_data_path.replace("highlight_", "guided_queries/highlight_").replace("_release.jsonl", "_guided.jsonl")
+            # Use guided query features directory
+            eval_q_feat_dir = eval_q_feat_dir.replace("clip_text_features", "clip_text_features_guided")
+
+        dataset_config["data_path"] = eval_data_path
         dataset_config["txt_drop_ratio"] = 0
-        dataset_config["q_feat_dir"] = opt.t_feat_dir.replace("sub_features", "text_features")  # for pretraining
+        dataset_config["q_feat_dir"] = eval_q_feat_dir
         # dataset_config["load_labels"] = False  # uncomment to calculate eval loss
         if opt.a_feat_dir is None:
             eval_dataset = StartEndDataset(**dataset_config)
@@ -409,7 +460,11 @@ def start_training():
         train_hl(model, criterion, optimizer, lr_scheduler, train_dataset, eval_dataset, opt)
     else:
         train(model, criterion, optimizer, lr_scheduler, train_dataset, eval_dataset, opt)
-    
+
+    # Print guided query pairs at the end of training
+    if opt.use_guided_queries:
+        print_guided_query_samples(train_dataset, opt)
+
     return opt.ckpt_filepath.replace(".ckpt", "_best.ckpt"), opt.eval_split_name, opt.eval_path, opt.debug, opt
 
 
