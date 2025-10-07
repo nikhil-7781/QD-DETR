@@ -35,7 +35,7 @@ class LearnedDecomposer(nn.Module):
         """
         Args:
             src_txt: (B, L_txt, D) text token features
-            src_txt_mask: (B, L_txt) boolean mask (True = valid token)
+            src_txt_mask: (B, L_txt) mask (1 = valid token, 0 = padding)
 
         Returns:
             event_tokens: (B, L_txt, D) masked event features
@@ -47,6 +47,12 @@ class LearnedDecomposer(nn.Module):
         """
         B, L_txt, D = src_txt.shape
 
+        # Convert mask to boolean if needed (1 = valid, 0 = padding)
+        if src_txt_mask.dtype != torch.bool:
+            src_txt_mask_bool = src_txt_mask.bool()
+        else:
+            src_txt_mask_bool = src_txt_mask
+
         # Expand queries for batch
         queries = torch.cat([
             self.event_query.expand(B, -1, -1),
@@ -56,11 +62,12 @@ class LearnedDecomposer(nn.Module):
 
         # Attention: queries attend to text tokens
         # PyTorch MultiheadAttention expects (seq_len, batch, dim) format
+        # key_padding_mask: True = ignore, False = attend
         _, attn_weights = self.decompose_attn(
             queries.transpose(0, 1),           # (3, B, D)
             src_txt.transpose(0, 1),           # (L_txt, B, D)
             src_txt.transpose(0, 1),           # (L_txt, B, D)
-            key_padding_mask=~src_txt_mask,    # (B, L_txt) - True = ignore
+            key_padding_mask=~src_txt_mask_bool,  # (B, L_txt) - True = ignore
             need_weights=True,
             average_attn_weights=True
         )
@@ -78,9 +85,9 @@ class LearnedDecomposer(nn.Module):
         temporal_tokens = src_txt * temporal_weights # (B, L_txt, D)
 
         # Create boolean masks for attention (use original text mask as base)
-        event_mask = src_txt_mask.clone()
-        object_mask = src_txt_mask.clone()
-        temporal_mask = src_txt_mask.clone()
+        event_mask = src_txt_mask_bool.clone()
+        object_mask = src_txt_mask_bool.clone()
+        temporal_mask = src_txt_mask_bool.clone()
 
         return event_tokens, object_tokens, temporal_tokens, \
                event_mask, object_mask, temporal_mask
@@ -129,7 +136,7 @@ class QDECA(nn.Module):
         Args:
             src_vid: (B, L_vid, D) video clip features
             src_txt: (B, L_txt, D) text token features
-            src_txt_mask: (B, L_txt) boolean mask (True = valid token)
+            src_txt_mask: (B, L_txt) mask (1 = valid token, 0 = padding)
 
         Returns:
             src_vid_qdeca: (B, L_vid, D) enhanced video features
@@ -137,6 +144,7 @@ class QDECA(nn.Module):
         B, L_vid, D = src_vid.shape
 
         # Decompose text into semantic components
+        # Returns boolean masks
         event_tokens, object_tokens, temporal_tokens, \
         event_mask, object_mask, temporal_mask = self.decomposer(src_txt, src_txt_mask)
 
@@ -151,11 +159,12 @@ class QDECA(nn.Module):
         vid_T = src_vid.transpose(0, 1)  # (L_vid, B, D)
 
         # Cross-attention: video clips attend to decomposed text components
+        # key_padding_mask expects True = ignore, False = attend
         attn_e, _ = self.event_attn(
             vid_T,
             event_tokens.transpose(0, 1),
             event_tokens.transpose(0, 1),
-            key_padding_mask=~event_mask  # True = ignore
+            key_padding_mask=~event_mask  # Invert: True becomes False (attend)
         )  # (L_vid, B, D)
 
         attn_o, _ = self.object_attn(
