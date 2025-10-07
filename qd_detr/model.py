@@ -12,6 +12,7 @@ from qd_detr.matcher import build_matcher
 from qd_detr.transformer import build_transformer
 from qd_detr.position_encoding import build_position_encoding
 from qd_detr.misc import accuracy
+from qd_detr.qdeca import QDECA
 import numpy as np
 def inverse_sigmoid(x, eps=1e-3):
     x = x.clamp(min=0, max=1)
@@ -25,7 +26,8 @@ class QDDETR(nn.Module):
     def __init__(self, transformer, position_embed, txt_position_embed, txt_dim, vid_dim,
                  num_queries, input_dropout, aux_loss=False,
                  contrastive_align_loss=False, contrastive_hdim=64,
-                 max_v_l=75, span_loss_type="l1", use_txt_pos=False, n_input_proj=2, aud_dim=0):
+                 max_v_l=75, span_loss_type="l1", use_txt_pos=False, n_input_proj=2, aud_dim=0,
+                 use_qdeca=False, max_q_l=32, nheads=8):
         """ Initializes the model.
         Parameters:
             transformer: torch module of the transformer architecture. See transformer.py
@@ -87,6 +89,11 @@ class QDDETR(nn.Module):
         self.global_rep_token = torch.nn.Parameter(torch.randn(hidden_dim))
         self.global_rep_pos = torch.nn.Parameter(torch.randn(hidden_dim))
 
+        # QDECA module (optional)
+        self.use_qdeca = use_qdeca
+        if use_qdeca:
+            self.qdeca = QDECA(d_model=hidden_dim, num_heads=nheads, max_txt_len=max_q_l)
+
     def forward(self, src_txt, src_txt_mask, src_vid, src_vid_mask, src_aud=None, src_aud_mask=None):
         """The forward expects two tensors:
                - src_txt: [batch_size, L_txt, D_txt]
@@ -106,9 +113,14 @@ class QDDETR(nn.Module):
         """
         if src_aud is not None:
             src_vid = torch.cat([src_vid, src_aud], dim=2)
-            
+
         src_vid = self.input_vid_proj(src_vid)
         src_txt = self.input_txt_proj(src_txt)
+
+        # Apply QDECA if enabled (enhances video features with decomposed text)
+        if self.use_qdeca:
+            src_vid = self.qdeca(src_vid, src_txt, src_txt_mask)
+
         src = torch.cat([src_vid, src_txt], dim=1)  # (bsz, L_vid+L_txt, d)
         mask = torch.cat([src_vid_mask, src_txt_mask], dim=1).bool()  # (bsz, L_vid+L_txt)
         # TODO should we remove or use different positional embeddings to the src_txt?
@@ -523,6 +535,9 @@ def build_model(args):
     transformer = build_transformer(args)
     position_embedding, txt_position_embedding = build_position_encoding(args)
 
+    # Check if QDECA should be used
+    use_qdeca = getattr(args, 'use_qdeca', False)
+
     if args.a_feat_dir is None:
         model = QDDETR(
             transformer,
@@ -538,6 +553,9 @@ def build_model(args):
             span_loss_type=args.span_loss_type,
             use_txt_pos=args.use_txt_pos,
             n_input_proj=args.n_input_proj,
+            use_qdeca=use_qdeca,
+            max_q_l=args.max_q_l,
+            nheads=args.nheads,
         )
     else:
         model = QDDETR(
@@ -555,6 +573,9 @@ def build_model(args):
             span_loss_type=args.span_loss_type,
             use_txt_pos=args.use_txt_pos,
             n_input_proj=args.n_input_proj,
+            use_qdeca=use_qdeca,
+            max_q_l=args.max_q_l,
+            nheads=args.nheads,
         )
 
     matcher = build_matcher(args)

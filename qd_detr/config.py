@@ -147,6 +147,10 @@ class BaseOptions(object):
                                  "(or non-minimum suppression for distance)"
                                  "to post-processing the predictions. "
                                  "-1: do not use nms. [0, 1]")
+
+        # QDECA (Query Decomposition and Event-Centric Attention) config
+        parser.add_argument("--use_qdeca", action="store_true",
+                            help="Use Query Decomposition and Event-Centric Attention module")
         self.parser = parser
 
     def display_save(self, opt):
